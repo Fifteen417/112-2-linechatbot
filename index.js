@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
+const axios = require('axios');
 
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
@@ -55,12 +56,36 @@ function handleEvent(event) {
       replyMessage = '非常感谢！如果您愿意的话，您可以给我一个评分，以帮助我们改进服务。评分范围是1到5，1表示非常不满意，5表示非常满意。您愿意给我评分吗？';
       break;
     default:
-      replyMessage = '对不起，我不明白您的意思。请再说一遍。';
+      return callGeminiAPI(userMessage, event.replyToken);
   }
 
   return client.replyMessage(event.replyToken, {
     type: 'text',
     text: replyMessage
+  });
+}
+
+function callGeminiAPI(message, replyToken) {
+  return axios.post('https://api.gemini.com/v1/your-endpoint', {
+    data: message,
+    headers: {
+      'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  })
+  .then(response => {
+    const geminiResponse = response.data.reply;
+    return client.replyMessage(replyToken, {
+      type: 'text',
+      text: geminiResponse
+    });
+  })
+  .catch(error => {
+    console.error('Error from Gemini API:', error);
+    return client.replyMessage(replyToken, {
+      type: 'text',
+      text: 'Sorry, something went wrong.'
+    });
   });
 }
 
