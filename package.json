@@ -13,6 +13,6 @@
     "dotenv": "^10.0.0",
     "express": "^4.17.1",
     "torch": "^0.2.7",
-    "transformers": "^3.1.0"
+    "transformers": "^3.1.0"1
   }
 }
