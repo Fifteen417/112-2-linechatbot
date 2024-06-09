@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
 const axios = require('axios');
+const { AutoTokenizer, AutoModelForCausalLM } = require('transformers');
+const torch = require('torch');
 
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
@@ -10,6 +12,10 @@ const config = {
 
 const client = new line.Client(config);
 const app = express();
+
+// 加载 OPT-125M 模型和 Tokenizer
+const tokenizer = AutoTokenizer.from_pretrained("facebook/opt-125m");
+const model = AutoModelForCausalLM.from_pretrained("facebook/opt-125m");
 
 app.post('/webhook', line.middleware(config), (req, res) => {
   Promise
@@ -28,47 +34,22 @@ function handleEvent(event) {
 
   const userMessage = event.message.text.toLowerCase();
 
-  // 判斷是否需要調用 Gemini API 的標誌
-  let useGeminiAPI = true;
-
+  // 处理用户输入
   let replyMessage = '';
-
   switch (true) {
     case userMessage.includes('你好'):
-      replyMessage = '欢迎使用3C产品推荐助手！请问您需要什么样的帮助呢？';
-      useGeminiAPI = false;
-      break;
-    case userMessage.includes('筆記本'):
-      replyMessage = '好的，请告诉我您的具体需求，比如性能、价格范围、品牌偏好等。';
-      useGeminiAPI = false;
-      break;
-    case userMessage.includes('轻薄'):
-      replyMessage = '明白了，我会为您推荐符合这些要求的笔记本。';
-      useGeminiAPI = false;
+      replyMessage = '欢迎使用笔记本推荐助手！请问您想找什么样的笔记本呢？';
       break;
     case userMessage.includes('推荐'):
-      // 當用戶請求推薦時，調用 Gemini API
-      return callGeminiAPIForRecommendation(userMessage, event.replyToken);
-    case userMessage.includes('详细信息'):
-      replyMessage = '这款笔记本的详细信息如下：[详细信息]。';
-      useGeminiAPI = false;
+      replyMessage = '好的，请告诉我您的需求，例如：\n' +
+                    '1.  预算范围：例如 5000 元以下，10000 元左右\n' +
+                    '2.  用途：例如 游戏、办公、编程、学习\n' +
+                    '3.  品牌偏好：例如  苹果、联想、华硕\n' +
+                    '4.  其他需求：例如 轻薄、性能强大、屏幕尺寸、电池续航等';
       break;
-    case userMessage.includes('比较'):
-      replyMessage = '好的，请稍等，我会为您比较这两款产品的性能。';
-      useGeminiAPI = false;
-      break;
-    case userMessage.includes('决定购买'):
-      replyMessage = '不客气，祝您购物愉快！如果您还有其他问题或需要帮助，随时联系我。';
-      useGeminiAPI = false;
-      break;
-    case userMessage.includes('评分'):
-      replyMessage = '非常感谢！如果您愿意的话，您可以给我一个评分，以帮助我们改进服务。评分范围是1到5，1表示非常不满意，5表示非常满意。您愿意给我评分吗？';
-      useGeminiAPI = false;
-      break;
-  }
-
-  if (useGeminiAPI) {
-    return callGeminiAPI(userMessage, event.replyToken);
+    default:
+      // 使用 OPT-125M 模型生成回复
+      return callOPTForRecommendation(userMessage, event.replyToken);
   }
 
   return client.replyMessage(event.replyToken, {
@@ -77,60 +58,37 @@ function handleEvent(event) {
   });
 }
 
-// 調用 Gemini API 來獲取推薦產品
-function callGeminiAPIForRecommendation(message, replyToken) {
-  return axios.post('https://api.gemini.com/v1/recommendations', {
-    data: message,
-    headers: {
-      'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`,
-      'Content-Type': 'application/json'
-    }
-  })
-  .then(response => {
-    const recommendations = response.data.recommendations;
-    let replyMessage = '基于您的需求，我为您找到了几款符合条件的笔记本电脑：\n';
-    recommendations.forEach((product, index) => {
-      replyMessage += `${index + 1}. ${product.name} - ${product.details}\n`;
+// 调用 OPT-125M 模型进行文本生成
+function callOPTForRecommendation(message, replyToken) {
+  return generateText(model, tokenizer, message)
+    .then(response => {
+      const generatedText = response[0]; 
+      return client.replyMessage(replyToken, {
+        type: 'text',
+        text: generatedText
+      });
+    })
+    .catch(error => {
+      console.error('Error from OPT Model:', error);
+      return client.replyMessage(replyToken, {
+        type: 'text',
+        text: '很抱歉，系统出现错误，请稍后再试'
+      });
     });
-    replyMessage += '您想了解其中的哪款？';
-    
-    return client.replyMessage(replyToken, {
-      type: 'text',
-      text: replyMessage
-    });
-  })
-  .catch(error => {
-    console.error('Error from Gemini API:', error);
-    return client.replyMessage(replyToken, {
-      type: 'text',
-      text: 'Sorry, something went wrong.'
-    });
-  });
 }
 
-// 調用 Gemini API 處理其他消息
-function callGeminiAPI(message, replyToken) {
-  return axios.post('https://api.gemini.com/v1/your-endpoint', {
-    data: message,
-    headers: {
-      'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`,
-      'Content-Type': 'application/json'
-    }
-  })
-  .then(response => {
-    const geminiResponse = response.data.reply;
-    return client.replyMessage(replyToken, {
-      type: 'text',
-      text: geminiResponse
-    });
-  })
-  .catch(error => {
-    console.error('Error from Gemini API:', error);
-    return client.replyMessage(replyToken, {
-      type: 'text',
-      text: 'Sorry, something went wrong.'
-    });
-  });
+// 生成文本的函数
+function generateText(model, tokenizer, prompt, max_length=50, num_return_sequences=1) {
+  const input_ids = tokenizer(prompt, return_tensors="pt").input_ids;
+  const generated_ids = model.generate(
+    input_ids,
+    max_length=max_length,
+    num_return_sequences=num_return_sequences,
+    do_sample=true, // 使用采样生成多样化的文本
+    temperature=0.7 // 设置温度参数来控制生成文本的随机性
+  );
+  const generated_text = tokenizer.batch_decode(generated_ids, skip_special_tokens=true);
+  return generated_text;
 }
 
 const port = process.env.PORT || 3000;
